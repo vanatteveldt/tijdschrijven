@@ -17,11 +17,7 @@ import requests
 from icalendar import Calendar
 
 # ── config ────────────────────────────────────────────────────────────────────
-CALENDAR_ICS = os.environ.get("CALENDAR_ICS_URL", "")
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
-
-GITHUB_USER = os.environ.get("GITHUB_USER", "")
-GITHUB_REPOS = [r.strip() for r in os.environ.get("GITHUB_REPOS", "").split(",") if r.strip()]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -90,8 +86,8 @@ def gh_api_get(path: str, token: str) -> list:
 
 # ── data fetching ─────────────────────────────────────────────────────────────
 
-def fetch_calendar(patterns: list[re.Pattern]) -> dict[date, list[tuple[str, int]]]:
-    resp = requests.get(CALENDAR_ICS, timeout=30, allow_redirects=True)
+def fetch_calendar(patterns: list[re.Pattern], calendar_ics: str) -> dict[date, list[tuple[str, int]]]:
+    resp = requests.get(calendar_ics, timeout=30, allow_redirects=True)
     resp.raise_for_status()
     cal = Calendar.from_ical(resp.content)
 
@@ -113,10 +109,10 @@ def fetch_calendar(patterns: list[re.Pattern]) -> dict[date, list[tuple[str, int
     return days
 
 
-def fetch_commits(token: str) -> dict[date, list[datetime]]:
+def fetch_commits(token: str, github_user: str, github_repos: list[str]) -> dict[date, list[datetime]]:
     days: dict[date, list[datetime]] = defaultdict(list)
-    for repo in GITHUB_REPOS:
-        commits = gh_api_get(f"repos/{repo}/commits?author={GITHUB_USER}", token)
+    for repo in github_repos:
+        commits = gh_api_get(f"repos/{repo}/commits?author={github_user}", token)
         for c in commits:
             iso = c["commit"]["author"]["date"]
             dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
@@ -194,21 +190,24 @@ def render_error(msg: str) -> str:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        calendar_ics = os.environ.get("CALENDAR_ICS_URL", "")
         token = os.environ.get("GITHUB_TOKEN", "")
+        github_user = os.environ.get("GITHUB_USER", "")
+        github_repos = [r.strip() for r in os.environ.get("GITHUB_REPOS", "").split(",") if r.strip()]
         try:
-            if not CALENDAR_ICS:
+            if not calendar_ics:
                 raise ValueError("CALENDAR_ICS_URL environment variable is not set.")
             if not token:
                 raise ValueError("GITHUB_TOKEN environment variable is not set.")
-            if not GITHUB_USER:
+            if not github_user:
                 raise ValueError("GITHUB_USER environment variable is not set.")
-            if not GITHUB_REPOS:
+            if not github_repos:
                 raise ValueError("GITHUB_REPOS environment variable is not set.")
             patterns = load_patterns()
             if not patterns:
                 raise ValueError("MATCH_PATTERNS environment variable is not set.")
-            calendar_days = fetch_calendar(patterns)
-            commit_days = fetch_commits(token)
+            calendar_days = fetch_calendar(patterns, calendar_ics)
+            commit_days = fetch_commits(token, github_user, github_repos)
             body = render_html(calendar_days, commit_days)
             status = 200
         except Exception as e:
@@ -224,3 +223,21 @@ class handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass  # suppress default access logs
+
+
+if __name__ == "__main__":
+    from http.server import HTTPServer
+    from pathlib import Path
+    import sys
+
+    # Load .env from project root if present
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        import re as _re
+        raw = env_file.read_text()
+        for match in _re.finditer(r'^([A-Z_]+)=(.*?)(?=\n[A-Z_]+=|\Z)', raw, _re.MULTILINE | _re.DOTALL):
+            os.environ[match.group(1)] = match.group(2).strip()
+
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    print(f"Serving on http://localhost:{port}")
+    HTTPServer(("", port), handler).serve_forever()
