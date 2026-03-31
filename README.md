@@ -18,7 +18,7 @@ cp .env.example .env
 | `GITHUB_TOKEN` | GitHub personal access token with `repo` read scope |
 | `GITHUB_USER` | GitHub username whose commits to scan |
 | `GITHUB_REPOS` | Comma-separated list of repos to scan (`owner/repo` format) |
-| `MATCH_PATTERNS` | Newline-separated regex patterns matched against event titles and attendee addresses |
+| `MATCH_PATTERNS` | Pipe-separated (`\|`) regex patterns matched against event titles and attendee addresses |
 
 ## Local usage
 
@@ -50,7 +50,7 @@ python3 api/index.py 9000
 2. Go to [vercel.com/new](https://vercel.com/new) and import the repository
 3. Leave **Root Directory** as `/` (no change needed)
 4. Under **Environment Variables**, add all five variables from your `.env`
-   - For `MATCH_PATTERNS`, paste the multiline value directly — Vercel handles multiline env vars fine
+   - `MATCH_PATTERNS` is a single-line pipe-separated string, e.g. `what-?if|WP[1-8]|@example\.com`
 5. Click **Deploy**
 
 On each visit to the deployed URL, the page is regenerated live from the calendar and GitHub APIs.
