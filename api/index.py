@@ -11,7 +11,6 @@ import re
 from collections import defaultdict
 from datetime import datetime, date
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -19,7 +18,6 @@ from icalendar import Calendar
 
 # ── config ────────────────────────────────────────────────────────────────────
 CALENDAR_ICS = os.environ.get("CALENDAR_ICS_URL", "")
-EMAILS_FILE = Path(__file__).parent.parent / "emails.txt"
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 
 GITHUB_USER = os.environ.get("GITHUB_USER", "")
@@ -28,13 +26,14 @@ GITHUB_REPOS = [r.strip() for r in os.environ.get("GITHUB_REPOS", "").split(",")
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def load_emails(path: Path) -> set[str]:
-    emails = set()
-    for line in path.read_text().splitlines():
-        line = line.strip().lower()
-        if "@" in line:
-            emails.add(line)
-    return emails
+def load_patterns() -> list[re.Pattern]:
+    raw = os.environ.get("MATCH_PATTERNS", "")
+    patterns = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(re.compile(line, re.IGNORECASE))
+    return patterns
 
 
 def to_local_datetime(dt_val) -> datetime:
@@ -47,26 +46,22 @@ def to_local_datetime(dt_val) -> datetime:
     raise TypeError(f"Unexpected date type: {type(dt_val)}")
 
 
-def event_emails(component) -> set[str]:
-    emails = set()
+def event_text(component) -> str:
+    """Concatenate summary and all attendee/organizer strings for pattern matching."""
+    parts = [str(component.get("SUMMARY", ""))]
     for prop_name in ("ATTENDEE", "ORGANIZER"):
         val = component.get(prop_name)
         if val is None:
             continue
         if not isinstance(val, list):
             val = [val]
-        for v in val:
-            m = re.search(r"mailto:([^\s;>]+)", str(v), re.IGNORECASE)
-            if m:
-                emails.add(m.group(1).lower())
-    return emails
+        parts.extend(str(v) for v in val)
+    return " ".join(parts)
 
 
-def matches(component, target_emails: set[str]) -> bool:
-    summary = str(component.get("SUMMARY", ""))
-    if "what-if" in summary.lower() or "whatif" in summary.lower():
-        return True
-    return bool(event_emails(component) & target_emails)
+def matches(component, patterns: list[re.Pattern]) -> bool:
+    text = event_text(component)
+    return any(p.search(text) for p in patterns)
 
 
 def duration_str(minutes: int) -> str:
@@ -95,7 +90,7 @@ def gh_api_get(path: str, token: str) -> list:
 
 # ── data fetching ─────────────────────────────────────────────────────────────
 
-def fetch_calendar(target_emails: set[str]) -> dict[date, list[tuple[str, int]]]:
+def fetch_calendar(patterns: list[re.Pattern]) -> dict[date, list[tuple[str, int]]]:
     resp = requests.get(CALENDAR_ICS, timeout=30, allow_redirects=True)
     resp.raise_for_status()
     cal = Calendar.from_ical(resp.content)
@@ -104,7 +99,7 @@ def fetch_calendar(target_emails: set[str]) -> dict[date, list[tuple[str, int]]]
     for component in cal.walk():
         if component.name != "VEVENT":
             continue
-        if not matches(component, target_emails):
+        if not matches(component, patterns):
             continue
         summary = str(component.get("SUMMARY", "(no title)")).strip()
         dtstart = component.get("DTSTART")
@@ -209,8 +204,10 @@ class handler(BaseHTTPRequestHandler):
                 raise ValueError("GITHUB_USER environment variable is not set.")
             if not GITHUB_REPOS:
                 raise ValueError("GITHUB_REPOS environment variable is not set.")
-            target_emails = load_emails(EMAILS_FILE)
-            calendar_days = fetch_calendar(target_emails)
+            patterns = load_patterns()
+            if not patterns:
+                raise ValueError("MATCH_PATTERNS environment variable is not set.")
+            calendar_days = fetch_calendar(patterns)
             commit_days = fetch_commits(token)
             body = render_html(calendar_days, commit_days)
             status = 200
