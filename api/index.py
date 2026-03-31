@@ -111,12 +111,21 @@ def fetch_calendar(patterns: list[re.Pattern], calendar_ics: str) -> dict[date, 
 
 def fetch_commits(token: str, github_user: str, github_repos: list[str]) -> dict[date, list[datetime]]:
     days: dict[date, list[datetime]] = defaultdict(list)
+    seen_shas: set[str] = set()
     for repo in github_repos:
-        commits = gh_api_get(f"repos/{repo}/commits?author={github_user}", token)
-        for c in commits:
-            iso = c["commit"]["author"]["date"]
-            dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
-            days[dt.date()].append(dt)
+        branches = gh_api_get(f"repos/{repo}/branches", token)
+        for branch in branches:
+            commits = gh_api_get(
+                f"repos/{repo}/commits?author={github_user}&sha={branch['name']}", token
+            )
+            for c in commits:
+                sha = c["sha"]
+                if sha in seen_shas:
+                    continue
+                seen_shas.add(sha)
+                iso = c["commit"]["author"]["date"]
+                dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                days[dt.date()].append(dt)
     return days
 
 
